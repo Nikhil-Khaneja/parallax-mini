@@ -1,0 +1,17 @@
+VERSION ""
+
+NS_ :
+
+BS_:
+
+BU_: ECU
+
+BO_ 256 Powertrain: 8 ECU
+ SG_ VehicleSpeed : 0|16@1+ (0.01,0) [0|655.35] "km/h" ECU
+ SG_ EngineRPM : 16|16@1+ (1,0) [0|65535] "rpm" ECU
+ SG_ StateOfCharge : 32|10@1+ (0.1,0) [0|100] "%" ECU
+ SG_ CoolantTemp : 42|9@1+ (0.5,-40) [-40|215] "degC" ECU
+
+BO_ 257 Position: 8 ECU
+ SG_ GPS_Lat : 0|32@1- (1e-06,0) [-90|90] "deg" ECU
+ SG_ GPS_Lon : 32|32@1- (1e-06,0) [-180|180] "deg" ECU

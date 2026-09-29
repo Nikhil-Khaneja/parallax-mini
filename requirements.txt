@@ -1,0 +1,9 @@
+cantools==40.7.1
+fastapi==0.128.8
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.54
+paho-mqtt==2.1.0
+cryptography==44.0.0
+python-can==4.5.0
+pytest==8.4.2
+httpx==0.28.1

@@ -1,0 +1,56 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    volumes:
+      - ./deploy/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    ports:
+      - "1883:1883"
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: parallax
+      POSTGRES_PASSWORD: parallax
+      POSTGRES_DB: parallax
+    ports:
+      - "5432:5432"
+
+  backend:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    environment:
+      MQTT_HOST: mosquitto
+      DATABASE_URL: postgresql://parallax:parallax@db:5432/parallax
+    command: python scripts/run_backend.py
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mosquitto
+      - db
+
+  simulator:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    environment:
+      MQTT_HOST: mosquitto
+      FLEET_SIZE: "20"
+      SAMPLE_HZ: "1"
+      FAULT_VIN: "2"
+    command: python scripts/run_fleet.py
+    depends_on:
+      - mosquitto
+
+  dashboard:
+    image: node:20-alpine
+    working_dir: /app
+    environment:
+      VITE_API_TARGET: http://backend:8000
+    volumes:
+      - ./dashboard:/app
+    command: sh -c "npm install && npm run dev -- --host"
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
