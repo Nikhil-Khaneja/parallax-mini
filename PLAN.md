@@ -127,13 +127,65 @@ Decode logic is identical either way, so the DBC/telemetry path is unchanged.
 
 No GPU. ~2–3 GB RAM for the 20-vehicle stack on any modern laptop; 16 GB comfortable for 50+. GPU only relevant if the ML phase is later swapped for a deep model — not required by this plan.
 
+## Status (2026-09-29)
+
+Phases 1–6 are implemented in Python (commit `1cdaba3`): CAN simulator, MQTT ingest, fleet, signed OTA with rollback, ML anomaly gate, React dashboard, Docker Compose. Phase 7 is partly done: `.github/workflows/` does not exist yet, so CI still needs to be added.
+
+## Next: C++ vehicle side (Phases 8–11)
+
+The Python `simulator/` package stays as the **reference implementation and benchmark baseline**. It is not deleted. A new `vehicle/` directory reimplements the on-vehicle components in C++17. The cloud side (`backend/`, `ml/`) and `dashboard/` stay unchanged.
+
+### Why the vehicle side moves to C++
+
+Not for raw speed: ~20 vehicles × 6 signals at 10–100 Hz is trivial for Python. The reasons:
+- **Fidelity.** Real ECU firmware, telematics gateways, and OTA agents run C/C++ on embedded Linux. This project's premise is "real interfaces, not toy abstractions," so the on-vehicle code should be written the way it is in production.
+- **SocketCAN is a C API.** The C++ gateway opens a `PF_CAN` raw socket and reads `struct can_frame` directly, the way a real gateway does, instead of going through `python-can`.
+- **The OTA agent is safety-critical.** Signature/checksum verification and rollback belong in code with explicit memory and error handling.
+- **Measured, not assumed.** Phase 10 benchmarks C++ against the existing Python gateway. Any performance claim must come from those numbers.
+
+### C++ tech stack
+
+CMake (≥3.20, `FetchContent`), Linux SocketCAN (`linux/can.h`), `dbcppp` (DBC encode/decode), `paho.mqtt.cpp`, `nlohmann/json`, `libsodium` (Ed25519 verify + SHA-256), GoogleTest. Build with `-Wall -Wextra -Werror`; run tests under ASan + UBSan in CI. Same `dbc/fleet.dbc`, MQTT topics, and I/O contract as the Python side. No backend changes.
+
+```
+vehicle/
+  CMakeLists.txt
+  include/parallax/   # can_bus.hpp, signal_source.hpp, dbc_codec.hpp, ota_verifier.hpp
+  src/                # socketcan_bus.cpp, virtual_bus.cpp, signal_source.cpp, can_generator.cpp, gateway_agent.cpp, ota_agent.cpp
+  tests/              # GoogleTest
+bench/                # run_bench.py + RESULTS.md
+```
+
+### Phase 7 (finish) — CI
+- Add `.github/workflows/ci.yml`: install requirements, run `pytest`. (C++ jobs are added in Phase 8.)
+- **Done when:** CI is green on `main`.
+
+### Phase 8 — C++ CAN core + gateway
+- `CanBus` interface with `SocketCanBus` (raw `PF_CAN` on `vcan0`) and `VirtualBus` (in-process, for macOS dev and tests); `SyntheticSource`; `can_generator` and `gateway_agent` binaries (decode via `dbcppp` → telemetry JSON → MQTT).
+- CI job: CMake build + `ctest` under ASan/UBSan.
+- **Done when:** GoogleTest round-trip passes for all 6 signals on both buses; a pytest **contract test** decodes C++-generated frames with Python `cantools` and gets identical values (tolerance = signal scale); `docker compose` can run the fleet with the C++ gateway instead of the Python one (`GATEWAY_IMPL=cpp|py`), and existing `test_ingest.py` / `test_fleet.py` still pass.
+
+### Phase 9 — C++ OTA agent
+- `ota_agent`: verify Ed25519 signature + SHA-256 with libsodium, apply atomically (write new, then swap), report status on `fleet/<vin>/ota/status`, roll back on failure.
+- **Done when:** GoogleTest covers valid / bad-signature / bad-checksum / truncated artifacts; a contract test proves firmware signed by `scripts/sign_firmware.py` (Python `cryptography`) verifies in C++ and a tampered copy fails; existing `test_ota_rollback.py` passes with the C++ agent.
+
+### Phase 10 — Python vs. C++ benchmark
+- `bench/run_bench.py` drives both gateways with identical recorded frame streams and reports frames/sec per process, p50/p99 decode-to-publish latency, CPU %, peak RSS, and max vehicles per host before p99 exceeds 50 ms.
+- Run on Linux with real `vcan`. Commit `bench/RESULTS.md` with machine spec, commands, and raw numbers (median of 5 runs).
+- **Done when:** `RESULTS.md` is reproducible from one command.
+
+### Phase 11 — Docs
+- Update README tech stack, architecture diagram, and quick start for the C++ vehicle side, `GATEWAY_IMPL`, and benchmark results (numbers copied from `RESULTS.md` only).
+
 ## Honesty guardrails
 
 - Claim "**~20 simulated vehicles**" (or "up to N logical vehicles" only if the async mode is actually run).
 - Claim "**SocketCAN `vcan`**" — keep it as the default path; note the portable fallback.
 - Claim "**signed OTA with staged rollout and automatic rollback**" — backed by `test_ota_rollback.py`.
 - Claim "**streaming anomaly detection gating OTA**" — backed by `test_anomaly_gate.py`.
+- Claim "**vehicle-side agents in C++17**" only for components actually implemented in C++ and passing their GoogleTest + contract tests.
+- Performance claims ("N× throughput", "p99 X ms") only from `bench/RESULTS.md`, with the machine named. No numbers from memory or estimates.
 
 ## Milestone order
 
-1 → 2 → 3 → 4 → 5 → 6 → 7. Phases 4 and 5 are the differentiators; do them rigorously with tests before polishing the UI.
+1 → 2 → 3 → 4 → 5 → 6 → 7 are built in Python. Next: finish 7 (CI), then 8 → 9 → 10 → 11. Phases 8–10 (C++ gateway, C++ OTA agent, measured benchmark) are the next differentiators; keep the Python `simulator/` working throughout as the baseline.
